@@ -8,7 +8,6 @@ import pandas as pd
 from matplotlib import pyplot as plt
 import seaborn
 import tqdm
-from cvxopt import matrix, solvers
 import pickle
 
 
