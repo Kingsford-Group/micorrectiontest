@@ -239,7 +239,7 @@ double mutual_information_corrected(const Eigen::MatrixXi& bin_logexp1, const Ei
 };
 
 
-Eigen::MatrixXd	process_all_corrected_mutual_information(const Eigen::MatrixXi& bin_logexp, const vector< Eigen::MatrixXd >& transitions, int32_t n_bins, bool is_part_1)
+Eigen::MatrixXd	process_all_corrected_mutual_information(const Eigen::MatrixXi& bin_logexp, const vector< Eigen::MatrixXd >& transitions, int32_t n_bins)
 {
 	time_t CurrentTime;
 	string CurrentTimeStr;
@@ -255,15 +255,8 @@ Eigen::MatrixXd	process_all_corrected_mutual_information(const Eigen::MatrixXi& 
 			idx_pair_genes.push_back( make_pair(i, j) );
 	// result matrix
 	Eigen::MatrixXd mi_matrix = Eigen::MatrixXd::Zero(n_genes, n_genes);
-	int32_t part_start, part_end;
-	if (is_part_1) {
-		part_start = 0;
-		part_end = idx_pair_genes.size() / 2;
-	}
-	else {
-		part_start = idx_pair_genes.size() / 2;
-		part_end = idx_pair_genes.size();
-	}
+	int32_t part_start = 0;
+	int32_t part_end = idx_pair_genes.size();
 
 	time(&CurrentTime);
 	CurrentTimeStr=ctime(&CurrentTime);
@@ -309,16 +302,89 @@ void save_eigen_matrix(string outfile, const Eigen::MatrixXd & exp)
 };
 
 
+pair<double,double> dropout_rate_fit(const Eigen::MatrixXd& logexp)
+{
+	// get a vector of zero percentages and a vector of mean expression of nonzeros
+	int32_t n_genes = logexp.cols();
+	Eigen::VectorXd nonzeromean = Eigen::VectorXd::Zero(n_genes);
+	Eigen::VectorXd percentzero = Eigen::VectorXd::Zero(n_genes);
+	for (int32_t i = 0; i < n_genes; i++) {
+		vector<double> tmp;
+		for (int32_t j = 0; j < logexp.rows(); j++) {
+			if (logexp(j, i) > -24.5)
+				tmp.push_back(logexp(j, i));
+		}
+		if (tmp.size() > 0) {
+			Eigen::VectorXd tmp_eigen = Eigen::Map<Eigen::VectorXd, Eigen::Unaligned>(tmp.data(), tmp.size());
+			nonzeromean(i) = tmp_eigen.mean();
+		}
+		percentzero(i) = 1.0 * (logexp.rows() - tmp.size()) / logexp.rows();
+	}
+
+	// remove outliers: percentages zero is in the >80% quantile, but mean logexp is too small (<1%) or too large (>80% quantile)
+	// quantile of percentages
+	vector<double> vec(percentzero.data(), percentzero.data() + percentzero.rows() * percentzero.cols());
+	sort(vec.begin(), vec.end());
+	double percentage_80 = vec[(int32_t) vec.size() * 0.8];
+	// quantile of mean log expression
+	vec.assign(nonzeromean.data(), nonzeromean.data() + nonzeromean.rows() * nonzeromean.cols());
+	sort(vec.begin(), vec.end());
+	double mean_05 = vec[(int32_t) vec.size() * 0.01];
+	double mean_80 = vec[(int32_t) vec.size() * 0.8];
+	// filtering
+	vector<double> tmp_nonzeromean;
+	vector<double> tmp_percentagezero;
+	for (int32_t i = 0; i < nonzeromean.size(); i++) {
+		if (percentzero(i) <= percentage_80 || (nonzeromean(i) >= mean_05 && nonzeromean(i) <= mean_80)) {
+			tmp_nonzeromean.push_back( nonzeromean(i) );
+			tmp_percentagezero.push_back( percentzero(i) );
+		}
+	}
+	nonzeromean = Eigen::Map<Eigen::VectorXd, Eigen::Unaligned>(tmp_nonzeromean.data(), tmp_nonzeromean.size());
+	percentzero = Eigen::Map<Eigen::VectorXd, Eigen::Unaligned>(tmp_percentagezero.data(), tmp_percentagezero.size());
+
+	// fit an exponential distribution percentzero = exp( -lambd * (nonzeromean) - mu ), calculate lambd and mu
+	Eigen::MatrixXd X = Eigen::MatrixXd::Ones(nonzeromean.size(), 2);
+	X.col(0) = nonzeromean;
+	Eigen::MatrixXd y = percentzero.array().log().matrix();
+	y.resize(nonzeromean.size(), 1);
+	Eigen::MatrixXd XtX = X.transpose() * X;
+	cout << XtX << endl;
+	Eigen::MatrixXd beta = XtX.ldlt().solve( X.transpose() * y );
+	cout << (X.transpose() * y) << endl;
+	return make_pair(beta(0), beta(1));
+};
+
+
+void dropout_transition_genewise(const vector< vector<double> >& all_mean, double lambd, double mu, vector< Eigen::MatrixXd >& transitions)
+{
+	// clear result vector
+	transitions.clear();
+	for (int32_t i = 0; i < all_mean.size(); i++) {
+		Eigen::MatrixXd t = Eigen::MatrixXd::Zero(all_mean[i].size(), all_mean[i].size());
+		for (int32_t j = 0; j < all_mean[i].size(); j++) {
+			if (j == 0)
+				t(j, j) = 1;
+			else {
+				double y = std::exp(lambd * all_mean[i][j] + mu);
+				if (y > 1 - 1e-3)
+					y = 1 - 1e-3;
+				t(j, 0) = y;
+				t(j, j) = 1 - y;
+			}
+		}
+		transitions.push_back(t);
+	}
+};
+
+
 int32_t main(int32_t argc, char* argv[])
 {
 	string count_npyfile(argv[1]);
 	int32_t n_bins = atoi(argv[2]);
-	string transition_folder(argv[3]);
-	bool is_part_1 = atoi(argv[4]);
-	string out_prefix(argv[5]);
+	string output_mi_matrix(argv[3]);
 
 	Eigen::MatrixXd logexp = load_normalize_scrna( count_npyfile );
-	cout << "out mi file: " << (out_prefix + "_" + to_string(is_part_1) + ".dat") << endl;
 
 	// discretize
 	Eigen::MatrixXi bin_logexp;
@@ -328,36 +394,16 @@ int32_t main(int32_t argc, char* argv[])
 	mean_from_boundary(all_boundary, all_mean);
 	cout << "Finish binning.\n";
 
-	// transition matrix corresponding to the dropout
-	vector< Eigen::MatrixXd > transitions = read_vector_of_eigen_matrix(transition_folder + "/c_sc_transition_" + to_string(n_bins) + ".dat");
+	// estimate dropout rate
+	pair<double, double> beta = dropout_rate_fit(logexp);
+	double lambd = beta.first;
+	double mu = beta.second;
 
-	int32_t i = 22, j = 5977; // supposed to be small
-	cout << mutual_information_corrected(bin_logexp.col(i), bin_logexp.col(j), transitions[i], transitions[j], n_bins) << endl;
-
-	i = 40; j = 9652; // supposed to be small
-	cout << mutual_information_corrected(bin_logexp.col(i), bin_logexp.col(j), transitions[i], transitions[j], n_bins) << endl;
-
-	i = 138; j = 4149; // supposed to be small
-	cout << mutual_information_corrected(bin_logexp.col(i), bin_logexp.col(j), transitions[i], transitions[j], n_bins) << endl;
-
-	i = 1483, j = 1484;
-	cout << mutual_information_corrected(bin_logexp.col(i), bin_logexp.col(j), transitions[i], transitions[j], n_bins) << endl;
-
-	// this is supposed to be small?
-	i = 47; j = 13504;
-	cout << mutual_information_corrected(bin_logexp.col(i), bin_logexp.col(j), transitions[i], transitions[j], n_bins) << endl;
-
-	i = 1913; j = 1914;
-	cout << mutual_information_corrected(bin_logexp.col(i), bin_logexp.col(j), transitions[i], transitions[j], n_bins) << endl;
-
-	// this is supposed to be large?
-	i = 12414; j = 12417;
-	cout << mutual_information_corrected(bin_logexp.col(i), bin_logexp.col(j), transitions[i], transitions[j], n_bins) << endl;
-
-	i = 3; j = 8;
-	cout << mutual_information_corrected(bin_logexp.col(i), bin_logexp.col(j), transitions[i], transitions[j], n_bins) << endl;
+	// assume dropout rate of each gene is independent of each other, calculate the dropout transition matrix of each gene
+	vector< Eigen::MatrixXd > transitions;
+	dropout_transition_genewise(all_mean, lambd, mu, transitions);
 
 	// calculate mutual information
-	Eigen::MatrixXd mi_matrix = process_all_corrected_mutual_information(bin_logexp, transitions, n_bins, is_part_1);
-	save_eigen_matrix(out_prefix + "_" + to_string(is_part_1) + ".dat", mi_matrix);
+	Eigen::MatrixXd mi_matrix = process_all_corrected_mutual_information(bin_logexp, transitions, n_bins);
+	save_eigen_matrix(output_mi_matrix, mi_matrix);
 }
