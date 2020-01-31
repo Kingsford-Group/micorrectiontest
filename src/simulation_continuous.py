@@ -10,6 +10,7 @@ import seaborn
 import tqdm
 import pickle
 import scipy.spatial
+plt.rcParams.update({'font.size': 13})
 
 
 def generate_continuous_prob(lo = None, hi = None):
@@ -286,27 +287,10 @@ def run_1(script_dir):
 				result_mi_raw[(t, n_sample, n_bootstrap)] = np.array(result_mi_raw[(t, n_sample, n_bootstrap)])
 				result_mi_corr[(t, n_sample, n_bootstrap)] = np.array(result_mi_corr[(t, n_sample, n_bootstrap)])
 				print( (np.mean(np.abs( result_mi_real[(t, n_sample, n_bootstrap)] - result_mi_raw[(t, n_sample, n_bootstrap)] )), np.mean(np.abs( result_mi_real[(t, n_sample, n_bootstrap)] - result_mi_corr[(t, n_sample, n_bootstrap)] ))) )
-	# plot figure
-	plt.rcParams.update({'font.size': 12})
-	fig = plt.figure()
-	ax = plt.axes()
-	df = None
-	for k,v in result_mi_real.items():
-		tmp = pd.DataFrame( {"range of true MI" : "({}, {})".format(np.around(k[0]-0.1,2), np.around(k[0],2)), "absolute difference between MI" : np.abs(v - result_mi_raw[k]), "label" : "baseline"} )
-		tmp2 = pd.DataFrame( {"range of true MI" : "({}, {})".format(np.around(k[0]-0.1,2), np.around(k[0],2)), "absolute difference between MI" : np.abs(v - result_mi_corr[k]), "label" : "corrected"} )
-		if df is None:
-			df = tmp
-			df = df.append(tmp2)
-		else:
-			df = df.append(tmp, ignore_index = True)
-			df = df.append(tmp2, ignore_index = True)
-	seaborn.violinplot(data=df, x="range of true MI", y="absolute difference between MI", hue="label", ax=ax, palette=seaborn.color_palette("pastel"))
-	ax.set_xticklabels(ax.get_xticklabels())
-	ax.set_title("MI accuracy (sample = 5000, bootstrap = 20)")
-	handles, labels = ax.get_legend_handles_labels()
-	ax.legend(handles=handles, labels=labels)
-	fig.subplots_adjust(left=0.05)
-	fig.savefig(script_dir + "/results/simulation_independence.pdf", transparent = True, bbox_inches='tight')
+	# save result
+	pickle.dump( result_mi_real, open( script_dir + "/results/simulation_independence_real.pkl", "wb" ) )
+	pickle.dump( result_mi_raw, open( script_dir + "/results/simulation_independence_raw.pkl", "wb" ) )
+	pickle.dump( result_mi_corr, open( script_dir + "/results/simulation_independence_corr.pkl", "wb" ) )
 
 
 def run_3(script_dir):
@@ -344,13 +328,13 @@ def run_3(script_dir):
 						_,_,_,mi_raw = MI_KDE(x, y, h_x, h_y)
 						# for MI using correction
 						multi_covariance_est, label =  BootstrapCovariance_cluster(observation[:, :, 0], observation[:, :, 1], k)
-						for i in range(multi_covariance_est.shape[0]):
-							tmp_xsi, tmp_P = np.linalg.eig(multi_covariance_est[i,:,:] * 2)
+						for j in range(multi_covariance_est.shape[0]):
+							tmp_xsi, tmp_P = np.linalg.eig(multi_covariance_est[j,:,:] * 2)
 							tmp_P = tmp_P.transpose()
 							Sigma_1_2 = tmp_P.transpose().dot(np.diag(np.sqrt(tmp_xsi))).dot(tmp_P)
 							xsi,_ = np.linalg.eig( Sigma_1_2.dot(np.diag(1 / 2 / np.array([h_x**2, h_y**2]))).dot(Sigma_1_2) )
 							if np.max(xsi * 2) > 0.5:
-								multi_covariance_est[i,:,:] /= (np.max(xsi * 2) / 0.5)
+								multi_covariance_est[j,:,:] /= (np.max(xsi * 2) / 0.5)
 						_,_,_,mi_corr = MI_KDE_correction_cluster(x, y, h_x, h_y, multi_covariance_est, label)
 						# update result vector
 						result_mi_real[(k, n_sample, n_bootstrap)].append(mi_real)
@@ -370,69 +354,94 @@ def run_3(script_dir):
 	pickle.dump( result_mi_real, open( script_dir + "/results/simulation_double_mixture_real_05.pkl", "wb" ) )
 	pickle.dump( result_mi_raw, open( script_dir + "/results/simulation_double_mixture_raw_05.pkl", "wb" ) )
 	pickle.dump( result_mi_corr, open( script_dir + "/results/simulation_double_mixture_corr_05.pkl", "wb" ) )
-	# subplot 1
-	plt.rcParams.update({'font.size': 12})
-	fig, axes = plt.subplots(1, 3, figsize=(15, 4.2))
+
+
+def plot_combined(script_dir):
+	result_mi_real = pickle.load( open( script_dir + "/results/simulation_double_mixture_real_05.pkl", 'rb') )
+	result_mi_raw = pickle.load( open( script_dir + "/results/simulation_double_mixture_raw_05.pkl", 'rb') )
+	result_mi_corr = pickle.load( open( script_dir + "/results/simulation_double_mixture_corr_05.pkl", 'rb') )
+	result_inde_mi_real = pickle.load( open( script_dir + "/results/simulation_independence_real.pkl", 'rb') )
+	result_inde_mi_raw = pickle.load( open( script_dir + "/results/simulation_independence_raw.pkl", 'rb') )
+	result_inde_mi_corr = pickle.load( open( script_dir + "/results/simulation_independence_corr.pkl", 'rb') )
+	# plot
+	fig, axes = plt.subplots(2, 2, figsize=(9.69, 7))
+	# mixture subplot 1
 	df1 = None
 	for k,v in result_mi_real.items():
 		if k[0] != 10 or k[2] != 20:
 			continue
-		tmp = pd.DataFrame( {"sample size" : k[1], "absolute difference between MI" : np.abs(v - result_mi_raw[k]), "label" : "baseline"} )
-		tmp2 = pd.DataFrame( {"sample size" : k[1], "absolute difference between MI" : np.abs(v - result_mi_corr[k]), "label" : "corrected"} )
+		tmp = pd.DataFrame( {"sample size" : k[1], "abs diff between MI" : np.abs(v - result_mi_raw[k]), "label" : "baseline"} )
+		tmp2 = pd.DataFrame( {"sample size" : k[1], "abs diff between MI" : np.abs(v - result_mi_corr[k]), "label" : "corrected"} )
 		if df1 is None:
 			df1 = tmp
 			df1 = df1.append(tmp2)
 		else:
 			df1 = df1.append(tmp, ignore_index = True)
 			df1 = df1.append(tmp2, ignore_index = True)
-	seaborn.violinplot(data=df1, x="sample size", y="absolute difference between MI", hue="label", ax=axes[0], palette=seaborn.color_palette("pastel"))
-	axes[0].set_xticklabels(axes[0].get_xticklabels())
-	axes[0].set_title("Accuracy (mixture = 10, bootstrap = 20)")
-	handles, labels = axes[0].get_legend_handles_labels()
-	axes[0].legend(handles=handles, labels=labels)
-	axes[0].text(-1.1, 0.02062, "A", fontsize=14, fontweight='bold')
-	# subplot 2
+	seaborn.violinplot(data=df1, x="sample size", y="abs diff between MI", hue="label", cut=0, ax=axes[0,0], palette=seaborn.color_palette("pastel"))
+	axes[0,0].set_xticklabels(axes[0].get_xticklabels())
+	axes[0,0].set_title("mixture = 10, measurement = 20")
+	handles, labels = axes[0,0].get_legend_handles_labels()
+	axes[0,0].legend(handles=handles, labels=labels)
+	axes[0,0].text(-1.2, 0.018, "A", fontsize=14, fontweight='bold')
+	# mixture subplot 2
 	df2 = None
 	for k,v in result_mi_real.items():
 		if k[0] != 10 or k[1] != 5000:
 			continue
-		tmp = pd.DataFrame( {"bootstrap size" : k[2], "absolute difference between MI" : np.abs(v - result_mi_raw[k]), "label" : "baseline"} )
-		tmp2 = pd.DataFrame( {"bootstrap size" : k[2], "absolute difference between MI" : np.abs(v - result_mi_corr[k]), "label" : "corrected"} )
+		tmp = pd.DataFrame( {"measurement size" : k[2], "abs diff between MI" : np.abs(v - result_mi_raw[k]), "label" : "baseline"} )
+		tmp2 = pd.DataFrame( {"measurement size" : k[2], "abs diff between MI" : np.abs(v - result_mi_corr[k]), "label" : "corrected"} )
 		if df2 is None:
 			df2 = tmp
 			df2 = df2.append(tmp2)
 		else:
 			df2 = df2.append(tmp, ignore_index = True)
 			df2 = df2.append(tmp2, ignore_index = True)
-	seaborn.violinplot(data=df2, x="bootstrap size", y="absolute difference between MI", hue="label", ax=axes[1], palette=seaborn.color_palette("pastel"))
-	axes[1].set_xticklabels(axes[1].get_xticklabels())
-	axes[1].set_title("Accuracy (mixture = 10, sample = 5000)")
-	handles, labels = axes[1].get_legend_handles_labels()
-	axes[1].legend(handles=handles, labels=labels)
-	axes[1].text(-1, 0.01742, "B", fontsize=14, fontweight='bold')
-	# subplot 3
+	seaborn.violinplot(data=df2, x="measurement size", y="abs diff between MI", hue="label", cut=0, ax=axes[0, 1], palette=seaborn.color_palette("pastel"))
+	axes[0, 1].set_xticklabels(axes[0, 1].get_xticklabels())
+	axes[0, 1].set_title("mixture = 10, sample = 5000")
+	handles, labels = axes[0, 1].get_legend_handles_labels()
+	axes[0, 1].legend(handles=handles, labels=labels)
+	axes[0, 1].text(-1.2, 0.0145, "B", fontsize=14, fontweight='bold')
+	# mixture subplot 3
 	df3 = None
 	for k,v in result_mi_real.items():
 		if k[1] != 5000 or k[2] != 20:
 			continue
-		tmp = pd.DataFrame( {"number of mixtures" : k[0], "absolute difference between MI" : np.abs(v - result_mi_raw[k]), "label" : "baseline"} )
-		tmp2 = pd.DataFrame( {"number of mixtures" : k[0], "absolute difference between MI" : np.abs(v - result_mi_corr[k]), "label" : "corrected"} )
+		tmp = pd.DataFrame( {"number of mixtures" : k[0], "abs diff between MI" : np.abs(v - result_mi_raw[k]), "label" : "baseline"} )
+		tmp2 = pd.DataFrame( {"number of mixtures" : k[0], "abs diff between MI" : np.abs(v - result_mi_corr[k]), "label" : "corrected"} )
 		if df3 is None:
 			df3 = tmp
 			df3 = df3.append(tmp2)
 		else:
 			df3 = df3.append(tmp, ignore_index = True)
 			df3 = df3.append(tmp2, ignore_index = True)
-	seaborn.violinplot(data=df3, x="number of mixtures", y="absolute difference between MI", hue="label", ax=axes[2], palette=seaborn.color_palette("pastel"))
-	axes[2].set_xticklabels(axes[2].get_xticklabels())
-	axes[2].set_title("Accuracy (sample = 5000, bootstrap = 20)")
-	axes[2].set(ylim=(-0.025, 0.125))
-	handles, labels = axes[2].get_legend_handles_labels()
-	axes[2].legend(handles=handles, labels=labels)
-	axes[2].text(-1.2, 0.140, "C", fontsize=14, fontweight='bold')
-	# save plot
-	fig.subplots_adjust(left=0.1, wspace = 0.35)
-	fig.savefig(script_dir + "/results/simulation_mixture_double_all.pdf", transparent = True, bbox_inches='tight')
+	seaborn.violinplot(data=df3, x="number of mixtures", y="abs diff between MI", hue="label", cut=0, ax=axes[1, 0], palette=seaborn.color_palette("pastel"))
+	axes[1, 0].set_xticklabels(axes[2].get_xticklabels())
+	axes[1, 0].set_title("sample = 5000, measurement = 20")
+	handles, labels = axes[1, 0].get_legend_handles_labels()
+	axes[1, 0].legend(handles=handles, labels=labels)
+	axes[1, 0].text(-1.2, 0.050, "C", fontsize=14, fontweight='bold')
+	# independent
+	df4 = None
+	for k,v in result_inde_mi_real.items():
+		tmp = pd.DataFrame( {"range of true MI" : "({}, {})".format(np.around(k[0]-0.1,2), np.around(k[0],2)), "abs diff between MI" : np.abs(v - result_inde_mi_raw[k]), "label" : "baseline"} )
+		tmp2 = pd.DataFrame( {"range of true MI" : "({}, {})".format(np.around(k[0]-0.1,2), np.around(k[0],2)), "abs diff between MI" : np.abs(v - result_inde_mi_corr[k]), "label" : "corrected"} )
+		if df4 is None:
+			df4 = tmp
+			df4 = df4.append(tmp2)
+		else:
+			df4 = df4.append(tmp, ignore_index = True)
+			df4 = df4.append(tmp2, ignore_index = True)
+	seaborn.violinplot(data=df4, x="range of true MI", y="abs diff between MI", hue="label", cut=0, ax=axes[1, 1], palette=seaborn.color_palette("pastel"))
+	axes[1, 1].set_xticklabels(ax[1, 1].get_xticklabels())
+	axes[1, 1].set_title("simulation of weak independence")
+	axes[1, 1].set(ylim=(0, 0.055))
+	handles, labels = axes[1, 1].get_legend_handles_labels()
+	axes[1, 1].legend(handles=handles, labels=labels)
+	axes[1, 1].text(-1.2, 0.061, "D", fontsize=14, fontweight='bold')
+	fig.subplots_adjust(hspace=0.4, wspace = 0.4)
+	fig.savefig( script_dir + "/results/simulation_continuous_all.pdf", transparent = True, bbox_inches='tight')
 
 
 if __name__ == "__main__":
@@ -446,8 +455,14 @@ if __name__ == "__main__":
 	else:
 		script_dir = "../"
 
-	if not Path(script_dir + "/results/simulation_independence.pdf").exists():
+	if (not Path(script_dir + "/results/simulation_independence_real.pkl").exists()) or \
+	   (not Path(script_dir + "/results/simulation_independence_raw.pkl").exists()) or \
+	   (not Path(script_dir + "/results/simulation_independence_corr.pkl").exists()):
 		run_1(script_dir)
 
-	if not Path(script_dir + "/results/simulation_mixture_double_all.pdf").exists():
+	if (not Path(script_dir + "/results/simulation_double_mixture_real_05.pkl").exists()) or \
+	   (not Path(script_dir + "/results/simulation_double_mixture_raw_05.pkl").exists()) or \
+	   (not Path(script_dir + "/results/simulation_double_mixture_corr_05.pkl").exists()):
 		run_3(script_dir)
+
+	plot_combined(script_dir)

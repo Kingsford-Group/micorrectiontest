@@ -10,8 +10,8 @@ def MI_bincount(counts):
 		calculate discrete mutual information.
 		Input: count matrix (joint PMF with or without normalization), rows and columns are the categories of the two signals.
 	'''
-	px = 1.0 * np.sum(counts, axis=0) / np.sum(counts)
-	py = 1.0 * np.sum(counts, axis=1) / np.sum(counts)
+	px = 1.0 * np.sum(counts, axis=1) / np.sum(counts)
+	py = 1.0 * np.sum(counts, axis=0) / np.sum(counts)
 	pxy = 1.0 * counts / np.sum(counts)
 	MI = 0
 	for i in range(len(px)):
